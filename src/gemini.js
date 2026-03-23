@@ -46,7 +46,7 @@ async function extractFromImage(imageUrl) {
     const result = await axios.post(
       "https://api.anthropic.com/v1/messages",
       {
-        model: "claude-opus-4-5",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 500,
         messages: [
           {
