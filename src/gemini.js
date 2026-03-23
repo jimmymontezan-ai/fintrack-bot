@@ -13,9 +13,10 @@ async function extractFromImage(imageUrl) {
   try {
     const response = await axios.get(imageUrl, { responseType: "arraybuffer", timeout: 15000 });
     const base64 = Buffer.from(response.data).toString("base64");
-    const mimeType = response.headers["content-type"] || "image/jpeg";
+        let mimeType = (response.headers["content-type"] || "image/jpeg").split(";")[0].trim();
+        if (!["image/jpeg","image/png","image/gif","image/webp"].includes(mimeType)) mimeType = "image/jpeg";
 
-    const result = await axios.post(
+    const result = await axios.post(h
       "https://api.anthropic.com/v1/messages",
       {
         model: "claude-haiku-4-5-20251001",
@@ -56,7 +57,8 @@ async function extractFromImage(imageUrl) {
       notes: data.notes || null,
     };
   } catch (err) {
-    console.error("Error Claude extraccion:", err.message);
+        const apiErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+        console.error("Error Claude extraccion:", apiErr);
     return null;
   }
 }
