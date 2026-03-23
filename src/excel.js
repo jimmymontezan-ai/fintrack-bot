@@ -1,26 +1,46 @@
 const XLSX = require("xlsx");
 const path = require("path");
-const fs = require("fs");
-function formatDate(iso) { if (!iso) return "—"; return new Date(iso+"T00:00:00").toLocaleDateString("es-PE",{day:"2-digit",month:"2-digit",year:"numeric"}); }
+
+function formatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso + "T00:00:00").toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
 function generateExcel(transactions) {
   const wb = XLSX.utils.book_new();
-  const rows = transactions.map((t,i) => ({"#":i+1,"Código":t.uid,"Fecha":formatDate(t.date),"Destinatario":t.recipient||"—","Descripción":t.description||"—","Monto S/":parseFloat(t.amount||0).toFixed(2),"Método":t.method||"—","Categoría":t.category||"—","Notas":t.notes||"—"}));
-  rows.push({"#":"","Código":"","Fecha":"","Destinatario":"","Descripción":"TOTAL","Monto S/":transactions.reduce((s,t)=>s+parseFloat(t.amount||0),0).toFixed(2),"Método":"","Categoría":"","Notas":""});
+  const total = transactions.reduce(function(s, t) { return s + parseFloat(t.amount || 0); }, 0);
+
+  const rows = transactions.map(function(t, i) {
+    return { "#": i + 1, "Codigo": t.uid, "Fecha": formatDate(t.date), "Destinatario": t.recipient || "—", "Descripcion": t.description || "—", "Monto S/": parseFloat(t.amount || 0).toFixed(2), "Metodo": t.method || "—", "Categoria": t.category || "—", "Notas": t.notes || "—" };
+  });
+  rows.push({ "#": "", "Codigo": "", "Fecha": "", "Destinatario": "", "Descripcion": "TOTAL", "Monto S/": total.toFixed(2), "Metodo": "", "Categoria": "", "Notas": "" });
+
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws["!cols"]=[{wch:4},{wch:22},{wch:12},{wch:26},{wch:26},{wch:12},{wch:14},{wch:16},{wch:28}];
-  XLSX.utils.book_append_sheet(wb,"Transacciones",ws);
+  XLSX.utils.book_append_sheet(wb, ws, "Transacciones");
+
   const byCategory = {};
-  transactions.forEach(t => { const c=t.category||"Otro"; if(!byCategory[c]) byCategory[c]={count:0,total:0}; byCategory[c].count++; byCategory[c].total+=parseFloat(t.amount||0); });
-  const total = transactions.reduce((s,t)=>s+parseFloat(t.amount||0),0);
-  const resumen = Object.entries(byCategory).sort((a,b)=>b[1].total-a[1].total).map(([cat,{count,total:v}])=({"Categoría":cat,"N° Pagos":count,"Total S/":v.toFixed(2),"% Gasto":((v/total)*100).toFixed(1)+"%"}));
-  resumen.push({"Categoría":"TOTAL","N° Pagos":transactions.length,"Total S/":total.toFixed(2),"% Gasto":"100%"});
-  const ws2 = XLSX.utils.json_to_sheet(resumen);
-  ws2["!cols"]=[{wch:20},{wch:10},{wch:12},{wch:12}];
-  XLSX.utils.book_append_sheet(wb,"Resumen",ws2);
-  const desde = formatDate(transactions[0]?.date).replace(/\//g,"-");
-  const hasta = formatDate(transactions[transactions.length-1]?.date).replace(/\//g,"-");
-  const fp = path.join("/tmp",`FinTrack_${desde}_al_${hasta}.xlsx`);
-  XLSX.writeFile(wb,fp);
+  transactions.forEach(function(t) {
+    var c = t.category || "Otro";
+    if (!byCategory[c]) byCategory[c] = { count: 0, total: 0 };
+    byCategory[c].count++;
+    byCategory[c].total += parseFloat(t.amount || 0);
+  });
+
+  const resumenRows = Object.keys(byCategory).sort(function(a, b) {
+    return byCategory[b].total - byCategory[a].total;
+  }).map(function(cat) {
+    return { "Categoria": cat, "N Pagos": byCategory[cat].count, "Total S/": byCategory[cat].total.toFixed(2), "Porcentaje": ((byCategory[cat].total / total) * 100).toFixed(1) + "%" };
+  });
+  resumenRows.push({ "Categoria": "TOTAL", "N Pagos": transactions.length, "Total S/": total.toFixed(2), "Porcentaje": "100%" });
+
+  const ws2 = XLSX.utils.json_to_sheet(resumenRows);
+  XLSX.utils.book_append_sheet(wb, ws2, "Resumen");
+
+  const desde = formatDate(transactions[0] ? transactions[0].date : "").replace(/\//g, "-");
+  const hasta = formatDate(transactions[transactions.length - 1] ? transactions[transactions.length - 1].date : "").replace(/\//g, "-");
+  const fp = path.join("/tmp", "FinTrack_" + desde + "_al_" + hasta + ".xlsx");
+  XLSX.writeFile(wb, fp);
   return fp;
 }
+
 module.exports = { generateExcel };
