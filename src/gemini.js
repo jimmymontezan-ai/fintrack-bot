@@ -16,7 +16,7 @@ async function extractFromImage(imageUrl) {
         let mimeType = (response.headers["content-type"] || "image/jpeg").split(";")[0].trim();
         if (!["image/jpeg","image/png","image/gif","image/webp"].includes(mimeType)) mimeType = "image/jpeg";
 
-    const result = await axios.post(h
+    const result = await axios.post(
       "https://api.anthropic.com/v1/messages",
       {
         model: "claude-haiku-4-5-20251001",
