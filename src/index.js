@@ -132,7 +132,7 @@ bot.onText(/\/resumen/, async m => {
   } catch(e) { bot.sendMessage(m.chat.id, "❌ Error."); }
 });
 
-bot.onText(/\/excel/, async m => {
+bot.onText(/^(\/excel|excel)$/i, async m => {
   if (!auth(m)) return deny(m.chat.id);
   const p = await bot.sendMessage(m.chat.id, "⏳ Generando Excel...");
   try {
@@ -150,7 +150,7 @@ bot.onText(/\/excel/, async m => {
 
 // ── PROCESAR FOTO ─────────────────────────────────────────────────────────────
 
-async function procesarComprobante(chatId, fileId, imageUrl) {
+async function procesarComprobante(chatId, fileId, imageUrl, caption = null) {
   const p = await bot.sendMessage(chatId, "🔍 Leyendo comprobante con IA...");
   try {
     const extracted = await extractFromImage(imageUrl);
@@ -162,10 +162,10 @@ async function procesarComprobante(chatId, fileId, imageUrl) {
       pending[chatId] = { imageUrl, waitingManual: true };
       return;
     }
+    if (caption) extracted.notes = extracted.notes ? extracted.notes + ' | ' + caption : caption;
     const saved = await saveTransaction({ ...extracted, image_url: imageUrl });
     await bot.editMessageText(buildMsg(saved, saved.uid), { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" });
     // Verificar tope después de guardar
-    await checkTope(chatId, saved.amount, saved.currency);
   } catch(e) {
     console.error(e);
     bot.editMessageText("❌ Error al procesar.", { chat_id: chatId, message_id: p.message_id });
@@ -176,7 +176,7 @@ bot.on("photo", async m => {
   if (!auth(m)) return deny(m.chat.id);
   const fi = await bot.getFile(m.photo[m.photo.length - 1].file_id);
   const url = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fi.file_path}`;
-  await procesarComprobante(m.chat.id, m.photo[m.photo.length - 1].file_id, url);
+  await procesarComprobante(m.chat.id, m.photo[m.photo.length - 1].file_id, url, m.caption || null);
 });
 
 bot.on("document", async m => {
@@ -187,7 +187,7 @@ bot.on("document", async m => {
   }
   const fi = await bot.getFile(doc.file_id);
   const url = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fi.file_path}`;
-  await procesarComprobante(m.chat.id, doc.file_id, url);
+  await procesarComprobante(m.chat.id, doc.file_id, url, m.caption || null);
 });
 
 // ── INGRESO MANUAL ────────────────────────────────────────────────────────────
@@ -209,7 +209,6 @@ bot.on("message", async m => {
       });
       delete pending[m.chat.id];
       bot.sendMessage(m.chat.id, buildMsg(saved, saved.uid), { parse_mode: "Markdown" });
-      await checkTope(m.chat.id, saved.amount, "PEN");
     } catch(e) { bot.sendMessage(m.chat.id, "❌ Error al guardar."); }
   }
 });
