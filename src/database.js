@@ -23,4 +23,13 @@ async function getSummary(days = 15) {
   transactions.forEach(t => { byCategory[t.category] = (byCategory[t.category]||0) + parseFloat(t.amount||0); });
   return { total, count: transactions.length, byCategory };
 }
-module.exports = { saveTransaction, getTransactionsSince, getSummary };
+async function getAllTransactions() {
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("*")
+    .order("date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+module.exports = { saveTransaction, getTransactionsSince, getAllTransactions, getSummary };
