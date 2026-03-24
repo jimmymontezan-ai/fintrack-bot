@@ -3,7 +3,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const cron = require("node-cron");
 const fs = require("fs");
 const { extractFromImage } = require("./gemini");
-const { saveTransaction, getTransactionsSince, getSummary } = require("./database");
+const { saveTransaction, getTransactionsSince, getAllTransactions, getSummary } = require("./database");
 const { generateExcel } = require("./excel");
 
 const required = ["TELEGRAM_BOT_TOKEN","AUTHORIZED_USER_ID","ANTHROPIC_API_KEY","SUPABASE_URL","SUPABASE_ANON_KEY"];
@@ -136,9 +136,9 @@ bot.onText(/^(\/excel|excel)$/i, async m => {
   if (!auth(m)) return deny(m.chat.id);
   const p = await bot.sendMessage(m.chat.id, "⏳ Generando Excel...");
   try {
-    const txs = await getTransactionsSince(15);
+    const txs = await getAllTransactions();
     if (txs.length === 0) return bot.editMessageText("📭 Sin transacciones.", { chat_id: m.chat.id, message_id: p.message_id });
-    const fp = generateExcel(txs);
+    const fp = await generateExcel(txs);
     await bot.deleteMessage(m.chat.id, p.message_id);
     await bot.sendDocument(m.chat.id, fp, {
       caption: `📊 *Reporte FinTrack* — ${txs.length} transacciones · S/ ${txs.reduce((s,t)=>s+parseFloat(t.amount||0),0).toFixed(2)}`,
@@ -219,7 +219,7 @@ cron.schedule("0 8 1,16 * *", async () => {
   try {
     const txs = await getTransactionsSince(15);
     if (txs.length === 0) return bot.sendMessage(AUTHORIZED_USER, "📭 Sin transacciones en los últimos 15 días.");
-    const fp = generateExcel(txs);
+    const fp = await generateExcel(txs);
     const total = txs.reduce((s,t) => s + parseFloat(t.amount||0), 0);
     await bot.sendMessage(AUTHORIZED_USER,
       `📊 *Reporte Quincenal Automático*\n✅ ${txs.length} transacciones\n💰 Total: *S/ ${total.toFixed(2)}*`,
