@@ -25,7 +25,22 @@ async function fetchImageBuffer(url) {
 function getExtFromUrl(url) {
   const m = (url || "").match(/\.(jpg|jpeg|png|gif|webp)/i);
   return m ? m[1].toLowerCase() : "jpeg";
-}
+
+
+// Parse PNG/JPEG dimensions from buffer without external deps
+function getImageSize(buf) {
+  try {
+    if (buf[0] === 0x89 && buf[1] === 0x50) { // PNG
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    }
+    for (let i = 0; i < Math.min(buf.length - 9, 65536); i++) {
+      if (buf[i] === 0xFF && (buf[i+1] === 0xC0 || buf[i+1] === 0xC2 || buf[i+1] === 0xC1)) {
+        return { w: buf.readUInt16BE(i + 7), h: buf.readUInt16BE(i + 5) };
+      }
+    }
+  } catch (_) {}
+  return { w: 300, h: 400 };
+}}
 
 async function generateExcel(transactions) {
   const wb = new ExcelJS.Workbook();
@@ -205,7 +220,6 @@ async function generateExcel(transactions) {
     ].join("\n");
 
     const row = ws3.getRow(imgRowIdx);
-    row.height = 135;
     row.getCell(1).value = i + 1;
     row.getCell(1).alignment = { horizontal: "center", vertical: "top" };
     row.getCell(1).border = border;
@@ -218,12 +232,17 @@ async function generateExcel(transactions) {
       const buf = await fetchImageBuffer(t.image_url);
       if (buf) {
         const ext = getExtFromUrl(t.image_url);
-        const imgType = ext === "png" ? "png" : "jpeg";
-        try {
+          const { w: imgW, h: imgH } = getImageSize(buf);
+          const maxW = 280;
+          const scale = maxW / Math.max(imgW, 1);
+          const dispW = maxW;
+          const dispH = Math.round(imgH * scale);
+          // Adjust row height to fit image (Excel row height ≈ px * 0.755)
+          row.height = Math.max(100, Math.round(dispH * 0.755));
           const imgId = wb.addImage({ buffer: buf, extension: imgType });
           ws3.addImage(imgId, {
             tl: { col: 2, row: imgRowIdx - 1 },
-            br: { col: 3, row: imgRowIdx },
+            ext: { width: dispW, height: dispH },
             editAs: "oneCell",
           });
         } catch (_) {
