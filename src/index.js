@@ -1,9 +1,9 @@
-require("dotenv").config(); // v3
+require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
 const cron = require("node-cron");
 const fs = require("fs");
-const { extractFromImage } = require("./gemini");
-const { saveTransaction, getTransactionsSince, getAllTransactions, getSummary } = require("./database");
+const { extractFromImage, interpretContext } = require("./gemini");
+const { saveTransaction, updateTransaction, getTransactionsSince, getAllTransactions, getSummary } = require("./database");
 const { generateExcel } = require("./excel");
 
 const required = ["TELEGRAM_BOT_TOKEN","AUTHORIZED_USER_ID","ANTHROPIC_API_KEY","SUPABASE_URL","SUPABASE_ANON_KEY"];
@@ -13,10 +13,23 @@ const AUTHORIZED_USER = parseInt(process.env.AUTHORIZED_USER_ID);
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const pending = {};
 
-// Tope de gasto en USD (equivalente en soles según TC)
 const TOPE_USD = parseFloat(process.env.TOPE_USD || "5");
-const TC_SOLES = parseFloat(process.env.TC_SOLES || "3.75"); // Tipo de cambio
+const TC_SOLES = parseFloat(process.env.TC_SOLES || "3.75");
 const TOPE_SOLES = TOPE_USD * TC_SOLES;
+
+// Buffer de transacciones recientes para aplicar contexto
+let recentTxBuffer = [];
+let recentTxTimer = null;
+const RECENT_TX_TTL = 10 * 60 * 1000; // 10 minutos
+
+function pushRecentTx(tx) {
+  recentTxBuffer.push(tx);
+  if (recentTxTimer) clearTimeout(recentTxTimer);
+  recentTxTimer = setTimeout(() => {
+    recentTxBuffer = [];
+    recentTxTimer = null;
+  }, RECENT_TX_TTL);
+}
 
 console.log(`🤖 FinTrack Bot iniciado! Tope: $${TOPE_USD} USD = S/${TOPE_SOLES}`);
 
@@ -27,59 +40,70 @@ const fecha = iso => !iso ? "—" : new Date(iso+"T00:00:00").toLocaleDateString
 
 function buildMsg(d, uid) {
   const moneda = d.currency === "USD" ? "💵" : "💰";
-  return (`✅ *Transacción registrada*\n\n` +
-    `🔑 \`${uid}\`\n` +
-    `${moneda} *${cur(d.amount, d.currency)}*\n` +
-    `📅 ${fecha(d.date)}\n` +
-    `👤 ${d.recipient||"—"}\n` +
-    `📝 ${d.description||"—"}\n` +
-    `💳 ${d.method||"—"}\n` +
+  return (`✅ *Transacción registrada*
+
+` +
+    `🔑 \`${uid}\`
+` +
+    `${moneda} *${cur(d.amount, d.currency)}*
+` +
+    `📅 ${fecha(d.date)}
+` +
+    `👤 ${d.recipient||"—"}
+` +
+    `📝 ${d.description||"—"}
+` +
+    `💳 ${d.method||"—"}
+` +
     `🏷️ ${d.category||"—"}` +
-    `${d.notes ? `\n🔢 ${d.notes}` : ""}`
+    `${d.notes ? `
+🔢 ${d.notes}` : ""}`
   ).trim();
 }
 
 async function checkTope(chatId, newAmount, currency) {
   try {
     const { total } = await getSummary(30);
-    // Convertir nuevo monto a soles para comparar
     const nuevoEnSoles = currency === "USD" ? newAmount * TC_SOLES : newAmount;
     const totalConNuevo = total + nuevoEnSoles;
     const porcentaje = Math.round((totalConNuevo / TOPE_SOLES) * 100);
-
     if (totalConNuevo >= TOPE_SOLES) {
       await bot.sendMessage(chatId,
-        `🚨 *¡TOPE DE GASTO SUPERADO!*\n\n` +
-        `Has gastado *S/ ${totalConNuevo.toFixed(2)}* este mes\n` +
-        `Tu tope es *$${TOPE_USD} USD = S/ ${TOPE_SOLES.toFixed(2)}*\n\n` +
-        `⚠️ Considera revisar tus gastos.`,
+        `🚨 *¡TOPE DE GASTO SUPERADO!*
+
+Has gastado *S/ ${totalConNuevo.toFixed(2)}* este mes
+Tu tope es *$${TOPE_USD} USD = S/ ${TOPE_SOLES.toFixed(2)}*
+
+⚠️ Considera revisar tus gastos.`,
         { parse_mode: "Markdown" }
       );
     } else if (porcentaje >= 80) {
       await bot.sendMessage(chatId,
-        `⚠️ *Atención: ${porcentaje}% de tu tope*\n\n` +
-        `Llevas *S/ ${totalConNuevo.toFixed(2)}* de *S/ ${TOPE_SOLES.toFixed(2)}* este mes\n` +
-        `Te quedan *S/ ${(TOPE_SOLES - totalConNuevo).toFixed(2)}*`,
+        `⚠️ *Atención: ${porcentaje}% de tu tope*
+
+Llevas *S/ ${totalConNuevo.toFixed(2)}* de *S/ ${TOPE_SOLES.toFixed(2)}* este mes
+Te quedan *S/ ${(TOPE_SOLES - totalConNuevo).toFixed(2)}*`,
         { parse_mode: "Markdown" }
       );
     }
-  } catch(e) {
-    console.error("Error check tope:", e.message);
-  }
+  } catch(e) { console.error("Error check tope:", e.message); }
 }
 
-// ── COMANDOS ─────────────────────────────────────────────────────────────────
-
+// ── COMANDOS ──────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, m => {
   if (!auth(m)) return deny(m.chat.id);
   bot.sendMessage(m.chat.id,
-    `👋 *¡Bienvenido a FinTrack!*\n\n` +
-    `Envíame una foto 📷 de tu comprobante y lo registro automáticamente.\n\n` +
-    `*Comandos:*\n` +
-    `/resumen — Gastos del mes\n` +
-    `/tope — Ver tu tope de gasto\n` +
-    `/excel — Descargar reporte Excel\n` +
-    `/ayuda — Ayuda`,
+    `👋 *¡Bienvenido a FinTrack!*
+
+Envíame una foto 📷 de tu comprobante y lo registro automáticamente.
+
+Después de las fotos, puedes enviar un texto con detalles adicionales y lo actualizo.
+
+*Comandos:*
+/resumen — Gastos del mes
+/tope — Ver tu tope de gasto
+/excel — Descargar reporte Excel
+/ayuda — Ayuda`,
     { parse_mode: "Markdown" }
   );
 });
@@ -87,10 +111,18 @@ bot.onText(/\/start/, m => {
 bot.onText(/\/ayuda/, m => {
   if (!auth(m)) return deny(m.chat.id);
   bot.sendMessage(m.chat.id,
-    `📖 *Cómo usar FinTrack*\n\n` +
-    `Envía cualquier foto de comprobante:\n` +
-    `• Yape / Plin\n• Transferencias BBVA/BCP\n• Facturas y boletas\n• Recibos físicos\n• Vouchers de pago\n\n` +
-    `La IA extrae todo automáticamente 🤖`,
+    `📖 *Cómo usar FinTrack*
+
+Envía cualquier foto de comprobante:
+• Yape / Plin
+• Transferencias BBVA/BCP
+• Facturas y boletas
+• Recibos físicos
+• Vouchers de pago
+
+La IA extrae todo automáticamente 🤖
+
+💡 *Tip:* Después de enviar las fotos, manda un texto con detalles y actualizo las transacciones.`,
     { parse_mode: "Markdown" }
   );
 });
@@ -103,12 +135,14 @@ bot.onText(/\/tope/, async m => {
     const restante = TOPE_SOLES - total;
     const barra = "█".repeat(Math.min(Math.round(porcentaje/10), 10)) + "░".repeat(Math.max(10 - Math.round(porcentaje/10), 0));
     bot.sendMessage(m.chat.id,
-      `📊 *Tu tope de gasto*\n\n` +
-      `${barra} ${porcentaje}%\n\n` +
-      `💰 Gastado: *S/ ${total.toFixed(2)}*\n` +
-      `🎯 Tope: *$${TOPE_USD} = S/ ${TOPE_SOLES.toFixed(2)}*\n` +
-      `✅ Restante: *S/ ${Math.max(restante, 0).toFixed(2)}*\n` +
-      `📋 Transacciones: *${count}*`,
+      `📊 *Tu tope de gasto*
+
+${barra} ${porcentaje}%
+
+💰 Gastado: *S/ ${total.toFixed(2)}*
+🎯 Tope: *$${TOPE_USD} = S/ ${TOPE_SOLES.toFixed(2)}*
+✅ Restante: *S/ ${Math.max(restante, 0).toFixed(2)}*
+📋 Transacciones: *${count}*`,
       { parse_mode: "Markdown" }
     );
   } catch(e) { bot.sendMessage(m.chat.id, "❌ Error."); }
@@ -119,14 +153,17 @@ bot.onText(/\/resumen/, async m => {
   try {
     const { total, count, byCategory } = await getSummary(30);
     if (count === 0) return bot.sendMessage(m.chat.id, "📭 Sin transacciones este mes.");
-    const lines = Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`  • ${c}: *S/ ${v.toFixed(2)}*`).join("\n");
+    const lines = Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).map(([c,v])=>` • ${c}: *S/ ${v.toFixed(2)}*`).join("\n");
     const porcentaje = Math.round((total / TOPE_SOLES) * 100);
     bot.sendMessage(m.chat.id,
-      `📊 *Resumen del mes*\n\n` +
-      `💰 Total: *S/ ${total.toFixed(2)}*\n` +
-      `📋 Transacciones: *${count}*\n` +
-      `🎯 Tope: ${porcentaje}% usado\n\n` +
-      `*Por categoría:*\n${lines}`,
+      `📊 *Resumen del mes*
+
+💰 Total: *S/ ${total.toFixed(2)}*
+📋 Transacciones: *${count}*
+🎯 Tope: ${porcentaje}% usado
+
+*Por categoría:*
+${lines}`,
       { parse_mode: "Markdown" }
     );
   } catch(e) { bot.sendMessage(m.chat.id, "❌ Error."); }
@@ -148,8 +185,7 @@ bot.onText(/^(\/excel|excel)$/i, async m => {
   } catch(e) { bot.sendMessage(m.chat.id, "❌ Error al generar Excel."); }
 });
 
-// ── PROCESAR FOTO ─────────────────────────────────────────────────────────────
-
+// ── PROCESAR COMPROBANTE ──────────────────────────────────────────────────────
 async function procesarComprobante(chatId, fileId, imageUrl, caption = null) {
   const p = await bot.sendMessage(chatId, "🔍 Leyendo comprobante con IA...");
   try {
@@ -162,16 +198,55 @@ async function procesarComprobante(chatId, fileId, imageUrl, caption = null) {
       pending[chatId] = { imageUrl, waitingManual: true };
       return;
     }
-    if (caption) extracted.notes = extracted.notes ? extracted.notes + ' | ' + caption : caption;
+    if (caption) extracted.notes = extracted.notes ? extracted.notes + " | " + caption : caption;
     const saved = await saveTransaction({ ...extracted, image_url: imageUrl });
+    pushRecentTx(saved);
     await bot.editMessageText(buildMsg(saved, saved.uid), { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" });
-    // Verificar tope después de guardar
+    await checkTope(chatId, saved.amount, saved.currency);
   } catch(e) {
     console.error(e);
     bot.editMessageText("❌ Error al procesar.", { chat_id: chatId, message_id: p.message_id });
   }
 }
 
+// ── APLICAR CONTEXTO DE TEXTO ─────────────────────────────────────────────────
+async function procesarContexto(chatId, texto) {
+  const txsToUpdate = [...recentTxBuffer];
+  recentTxBuffer = [];
+  if (recentTxTimer) { clearTimeout(recentTxTimer); recentTxTimer = null; }
+
+  const p = await bot.sendMessage(chatId, "✏️ Actualizando transacciones con tu contexto...");
+  try {
+    const updates = await interpretContext(txsToUpdate, texto);
+    if (!updates || updates.length === 0) {
+      await bot.editMessageText("ℹ️ No pude relacionar el texto con las transacciones recientes.", { chat_id: chatId, message_id: p.message_id });
+      return;
+    }
+    const lines = [];
+    for (const upd of updates) {
+      if (!upd.id) continue;
+      try {
+        const row = await updateTransaction(upd.id, {
+          description: upd.description,
+          category: upd.category,
+          notes: upd.notes || null,
+        });
+        lines.push(`• ${cur(row.amount, row.currency)} — ${row.description} \[*${row.category}*]`);
+      } catch(e) { console.error("Error actualizando tx", upd.id, e.message); }
+    }
+    const msg = lines.length > 0
+      ? `✅ *Actualizadas ${lines.length} transacción(es):*
+
+${lines.join("\n")}`
+      : "⚠️ No se pudo actualizar ninguna transacción.";
+    await bot.editMessageText(msg, { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" });
+  } catch(e) {
+    console.error("Error procesarContexto:", e.message);
+    bot.editMessageText("❌ Error al procesar el contexto.", { chat_id: chatId, message_id: p.message_id });
+  }
+}
+
+// ── HANDLERS DE FOTOS Y DOCUMENTOS ───────────────────────────────────────────
 bot.on("photo", async m => {
   if (!auth(m)) return deny(m.chat.id);
   const fi = await bot.getFile(m.photo[m.photo.length - 1].file_id);
@@ -190,31 +265,43 @@ bot.on("document", async m => {
   await procesarComprobante(m.chat.id, doc.file_id, url, m.caption || null);
 });
 
-// ── INGRESO MANUAL ────────────────────────────────────────────────────────────
-
+// ── MENSAJES DE TEXTO ─────────────────────────────────────────────────────────
 bot.on("message", async m => {
   if (!auth(m) || m.photo || m.document || m.text?.startsWith("/")) return;
+  const texto = m.text?.trim();
+  if (!texto) return;
+
+  // Si hay transacciones recientes en buffer → aplicar como contexto
+  if (recentTxBuffer.length > 0) {
+    return procesarContexto(m.chat.id, texto);
+  }
+
+  // Ingreso manual después de fallo de OCR
   const p = pending[m.chat.id];
-  if (p?.waitingManual && m.text) {
-    const parts = m.text.split("|").map(s => s.trim());
+  if (p?.waitingManual) {
+    const parts = texto.split("|").map(s => s.trim());
     if (parts.length < 2 || isNaN(parseFloat(parts[0]))) {
       return bot.sendMessage(m.chat.id, "❌ Formato: `MONTO|DESTINATARIO|DESCRIPCION`", { parse_mode: "Markdown" });
     }
     try {
       const saved = await saveTransaction({
-        amount: parseFloat(parts[0]), recipient: parts[1] || "Manual",
-        description: parts[2] || "Ingreso manual", currency: "PEN",
-        date: new Date().toISOString().slice(0, 10), method: "Otro", category: "Otro",
-        image_url: p.imageUrl || null
+        amount: parseFloat(parts[0]),
+        recipient: parts[1] || "Manual",
+        description: parts[2] || "Ingreso manual",
+        currency: "PEN",
+        date: new Date().toISOString().slice(0, 10),
+        method: "Otro",
+        category: "Otros Gastos",
+        image_url: p.imageUrl || null,
       });
       delete pending[m.chat.id];
+      pushRecentTx(saved);
       bot.sendMessage(m.chat.id, buildMsg(saved, saved.uid), { parse_mode: "Markdown" });
     } catch(e) { bot.sendMessage(m.chat.id, "❌ Error al guardar."); }
   }
 });
 
 // ── REPORTE QUINCENAL AUTOMÁTICO ──────────────────────────────────────────────
-
 cron.schedule("0 8 1,16 * *", async () => {
   try {
     const txs = await getTransactionsSince(15);
@@ -222,7 +309,9 @@ cron.schedule("0 8 1,16 * *", async () => {
     const fp = await generateExcel(txs);
     const total = txs.reduce((s,t) => s + parseFloat(t.amount||0), 0);
     await bot.sendMessage(AUTHORIZED_USER,
-      `📊 *Reporte Quincenal Automático*\n✅ ${txs.length} transacciones\n💰 Total: *S/ ${total.toFixed(2)}*`,
+      `📊 *Reporte Quincenal Automático*
+✅ ${txs.length} transacciones
+💰 Total: *S/ ${total.toFixed(2)}*`,
       { parse_mode: "Markdown" }
     );
     await bot.sendDocument(AUTHORIZED_USER, fp, { caption: "📎 Reporte quincenal FinTrack" });
