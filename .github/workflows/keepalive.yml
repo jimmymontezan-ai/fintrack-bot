@@ -1,0 +1,13 @@
+name: Keepalive Render Bot
+
+on:
+  schedule:
+      - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render service
+        run: curl -s https://fintrack-bot-6rba.onrender.com
