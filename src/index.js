@@ -320,3 +320,12 @@ cron.schedule("0 8 1,16 * *", async () => {
 }, { timezone: "America/Lima" });
 
 bot.on("polling_error", e => console.error(e.message));
+
+
+// HTTP keepalive para Render.com free tier
+const http = require("http");
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("fintrack-bot OK");
+}).listen(PORT, () => console.log("Health server on port " + PORT));
