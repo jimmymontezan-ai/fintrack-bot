@@ -34,7 +34,8 @@ async function getTransactionsSince(days = 15) {
     .from("transactions")
     .select("*")
     .gte("date", since.toISOString().slice(0,10))
-    .order("date", { ascending: true });
+    .order("date", { ascending: true })
+    .order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
 }
@@ -49,11 +50,12 @@ async function getSummary(days = 15) {
   return { total, count: transactions.length, byCategory };
 }
 
+// FIX 3: ordenar por created_at para que transacciones recien insertadas aparezcan siempre
 async function getAllTransactions() {
   const { data, error } = await supabase
     .from("transactions")
     .select("*")
-    .order("date", { ascending: true });
+    .order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
 }
