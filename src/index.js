@@ -22,6 +22,10 @@ let recentTxBuffer = [];
 let recentTxTimer = null;
 const RECENT_TX_TTL = 10 * 60 * 1000; // 10 minutos
 
+// FIX 1: contexto pendiente cuando texto llega antes de que la foto termine de procesarse
+const pendingContext = {}; // chatId -> { texto, ts }
+const processingPhoto = {}; // chatId -> true mientras se procesa una foto
+
 function pushRecentTx(tx) {
   recentTxBuffer.push(tx);
   if (recentTxTimer) clearTimeout(recentTxTimer);
@@ -40,78 +44,36 @@ const fecha = iso => !iso ? "—" : new Date(iso+"T00:00:00").toLocaleDateString
 
 function buildMsg(d, uid) {
   const moneda = d.currency === "USD" ? "💵" : "💰";
-  return (`✅ *Transacción registrada*
-
-` +
-    `🔑 \`${uid}\`
-` +
-    `${moneda} *${cur(d.amount, d.currency)}*
-` +
-    `📅 ${fecha(d.date)}
-` +
-    `👤 ${d.recipient||"—"}
-` +
-    `📝 ${d.description||"—"}
-` +
-    `💳 ${d.method||"—"}
-` +
+  return (`✅ *Transacción registrada* ` +
+    `🔑 \`${uid}\` ` +
+    `${moneda} *${cur(d.amount, d.currency)}* ` +
+    `📅 ${fecha(d.date)} ` +
+    `👤 ${d.recipient||"—"} ` +
+    `📝 ${d.description||"—"} ` +
+    `💳 ${d.method||"—"} ` +
     `🏷️ ${d.category||"—"}` +
-    `${d.notes ? `
-🔢 ${d.notes}` : ""}`
+    `${d.notes ? ` 🔢 ${d.notes}` : ""}`
   ).trim();
 }
 
-async function checkTope(chatId, newAmount, currency) {
-  try {
-    const { total } = await getSummary(30);
-    const nuevoEnSoles = currency === "USD" ? newAmount * TC_SOLES : newAmount;
-    const totalConNuevo = total + nuevoEnSoles;
-    const porcentaje = Math.round((totalConNuevo / TOPE_SOLES) * 100);
-    if (totalConNuevo >= TOPE_SOLES) {
-      await bot.sendMessage(chatId,
-        `🚨 *¡TOPE DE GASTO SUPERADO!*
-
-Has gastado *S/ ${totalConNuevo.toFixed(2)}* este mes
-Tu tope es *$${TOPE_USD} USD = S/ ${TOPE_SOLES.toFixed(2)}*
-
-⚠️ Considera revisar tus gastos.`,
-        { parse_mode: "Markdown" }
-      );
-    } else if (porcentaje >= 80) {
-      await bot.sendMessage(chatId,
-        `⚠️ *Atención: ${porcentaje}% de tu tope*
-
-Llevas *S/ ${totalConNuevo.toFixed(2)}* de *S/ ${TOPE_SOLES.toFixed(2)}* este mes
-Te quedan *S/ ${(TOPE_SOLES - totalConNuevo).toFixed(2)}*`,
-        { parse_mode: "Markdown" }
-      );
-    }
-  } catch(e) { console.error("Error check tope:", e.message); }
-}
-
-// ── COMANDOS ──────────────────────────────────────────────────────────────────
+// ── COMANDOS ────────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, m => {
   if (!auth(m)) return deny(m.chat.id);
-  bot.sendMessage(m.chat.id,
-    `👋 *¡Bienvenido a FinTrack!*
+  bot.sendMessage(m.chat.id, `👋 *¡Bienvenido a FinTrack!*
 
 Envíame una foto 📷 de tu comprobante y lo registro automáticamente.
-
 Después de las fotos, puedes enviar un texto con detalles adicionales y lo actualizo.
 
 *Comandos:*
 /resumen — Gastos del mes
 /tope — Ver tu tope de gasto
 /excel — Descargar reporte Excel
-/ayuda — Ayuda`,
-    { parse_mode: "Markdown" }
-  );
+/ayuda — Ayuda`, { parse_mode: "Markdown" });
 });
 
 bot.onText(/\/ayuda/, m => {
   if (!auth(m)) return deny(m.chat.id);
-  bot.sendMessage(m.chat.id,
-    `📖 *Cómo usar FinTrack*
+  bot.sendMessage(m.chat.id, `📖 *Cómo usar FinTrack*
 
 Envía cualquier foto de comprobante:
 • Yape / Plin
@@ -122,9 +84,7 @@ Envía cualquier foto de comprobante:
 
 La IA extrae todo automáticamente 🤖
 
-💡 *Tip:* Después de enviar las fotos, manda un texto con detalles y actualizo las transacciones.`,
-    { parse_mode: "Markdown" }
-  );
+💡 *Tip:* Después de enviar las fotos, manda un texto con detalles y actualizo las transacciones.`, { parse_mode: "Markdown" });
 });
 
 bot.onText(/\/tope/, async m => {
@@ -134,18 +94,17 @@ bot.onText(/\/tope/, async m => {
     const porcentaje = Math.round((total / TOPE_SOLES) * 100);
     const restante = TOPE_SOLES - total;
     const barra = "█".repeat(Math.min(Math.round(porcentaje/10), 10)) + "░".repeat(Math.max(10 - Math.round(porcentaje/10), 0));
-    bot.sendMessage(m.chat.id,
-      `📊 *Tu tope de gasto*
+    bot.sendMessage(m.chat.id, `📊 *Tu tope de gasto*
 
 ${barra} ${porcentaje}%
 
 💰 Gastado: *S/ ${total.toFixed(2)}*
 🎯 Tope: *$${TOPE_USD} = S/ ${TOPE_SOLES.toFixed(2)}*
 ✅ Restante: *S/ ${Math.max(restante, 0).toFixed(2)}*
-📋 Transacciones: *${count}*`,
-      { parse_mode: "Markdown" }
-    );
-  } catch(e) { bot.sendMessage(m.chat.id, "❌ Error."); }
+📋 Transacciones: *${count}*`, { parse_mode: "Markdown" });
+  } catch(e) {
+    bot.sendMessage(m.chat.id, "❌ Error.");
+  }
 });
 
 bot.onText(/\/resumen/, async m => {
@@ -155,18 +114,17 @@ bot.onText(/\/resumen/, async m => {
     if (count === 0) return bot.sendMessage(m.chat.id, "📭 Sin transacciones este mes.");
     const lines = Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).map(([c,v])=>` • ${c}: *S/ ${v.toFixed(2)}*`).join("\n");
     const porcentaje = Math.round((total / TOPE_SOLES) * 100);
-    bot.sendMessage(m.chat.id,
-      `📊 *Resumen del mes*
+    bot.sendMessage(m.chat.id, `📊 *Resumen del mes*
 
 💰 Total: *S/ ${total.toFixed(2)}*
 📋 Transacciones: *${count}*
 🎯 Tope: ${porcentaje}% usado
 
 *Por categoría:*
-${lines}`,
-      { parse_mode: "Markdown" }
-    );
-  } catch(e) { bot.sendMessage(m.chat.id, "❌ Error."); }
+${lines}`, { parse_mode: "Markdown" });
+  } catch(e) {
+    bot.sendMessage(m.chat.id, "❌ Error.");
+  }
 });
 
 bot.onText(/^(\/excel|excel)$/i, async m => {
@@ -182,15 +140,19 @@ bot.onText(/^(\/excel|excel)$/i, async m => {
       parse_mode: "Markdown"
     });
     fs.unlinkSync(fp);
-  } catch(e) { bot.sendMessage(m.chat.id, "❌ Error al generar Excel."); }
+  } catch(e) {
+    bot.sendMessage(m.chat.id, "❌ Error al generar Excel.");
+  }
 });
 
 // ── PROCESAR COMPROBANTE ──────────────────────────────────────────────────────
 async function procesarComprobante(chatId, fileId, imageUrl, caption = null) {
+  processingPhoto[chatId] = true; // FIX 1: marcar que estamos procesando
   const p = await bot.sendMessage(chatId, "🔍 Leyendo comprobante con IA...");
   try {
     const extracted = await extractFromImage(imageUrl);
     if (!extracted) {
+      delete processingPhoto[chatId];
       await bot.editMessageText(
         "⚠️ No pude leer el comprobante.\n\nEnvía los datos así:\n`MONTO|DESTINATARIO|DESCRIPCION`\nEjemplo: `45.50|Tambo|Desayuno`",
         { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" }
@@ -201,9 +163,21 @@ async function procesarComprobante(chatId, fileId, imageUrl, caption = null) {
     if (caption) extracted.notes = extracted.notes ? extracted.notes + " | " + caption : caption;
     const saved = await saveTransaction({ ...extracted, image_url: imageUrl });
     pushRecentTx(saved);
-    await bot.editMessageText(buildMsg(saved, saved.uid), { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" });
-    await checkTope(chatId, saved.amount, saved.currency);
+    delete processingPhoto[chatId]; // FIX 1: desmarcar antes de responder
+    await bot.editMessageText(buildMsg(saved, saved.uid), {
+      chat_id: chatId,
+      message_id: p.message_id,
+      parse_mode: "Markdown"
+    });
+    // FIX 2: eliminado checkTope — ya no se envía alerta automática de tope
+    // FIX 1: si el usuario mandó contexto mientras esperaba, aplicarlo ahora
+    if (pendingContext[chatId] && (Date.now() - pendingContext[chatId].ts) < 5 * 60 * 1000) {
+      const ctx = pendingContext[chatId].texto;
+      delete pendingContext[chatId];
+      await procesarContexto(chatId, ctx);
+    }
   } catch(e) {
+    delete processingPhoto[chatId];
     console.error(e);
     bot.editMessageText("❌ Error al procesar.", { chat_id: chatId, message_id: p.message_id });
   }
@@ -214,7 +188,6 @@ async function procesarContexto(chatId, texto) {
   const txsToUpdate = [...recentTxBuffer];
   recentTxBuffer = [];
   if (recentTxTimer) { clearTimeout(recentTxTimer); recentTxTimer = null; }
-
   const p = await bot.sendMessage(chatId, "✏️ Actualizando transacciones con tu contexto...");
   try {
     const updates = await interpretContext(txsToUpdate, texto);
@@ -231,13 +204,13 @@ async function procesarContexto(chatId, texto) {
           category: upd.category,
           notes: upd.notes || null,
         });
-        lines.push(`• ${cur(row.amount, row.currency)} — ${row.description} \[*${row.category}*]`);
-      } catch(e) { console.error("Error actualizando tx", upd.id, e.message); }
+        lines.push(`• ${cur(row.amount, row.currency)} — ${row.description} [*${row.category}*]`);
+      } catch(e) {
+        console.error("Error actualizando tx", upd.id, e.message);
+      }
     }
     const msg = lines.length > 0
-      ? `✅ *Actualizadas ${lines.length} transacción(es):*
-
-${lines.join("\n")}`
+      ? `✅ *Actualizadas ${lines.length} transacción(es):*\n${lines.join("\n")}`
       : "⚠️ No se pudo actualizar ninguna transacción.";
     await bot.editMessageText(msg, { chat_id: chatId, message_id: p.message_id, parse_mode: "Markdown" });
   } catch(e) {
@@ -276,6 +249,12 @@ bot.on("message", async m => {
     return procesarContexto(m.chat.id, texto);
   }
 
+  // FIX 1: si se está procesando una foto, guardar texto para aplicarlo después
+  if (processingPhoto[m.chat.id]) {
+    pendingContext[m.chat.id] = { texto, ts: Date.now() };
+    return;
+  }
+
   // Ingreso manual después de fallo de OCR
   const p = pending[m.chat.id];
   if (p?.waitingManual) {
@@ -297,7 +276,9 @@ bot.on("message", async m => {
       delete pending[m.chat.id];
       pushRecentTx(saved);
       bot.sendMessage(m.chat.id, buildMsg(saved, saved.uid), { parse_mode: "Markdown" });
-    } catch(e) { bot.sendMessage(m.chat.id, "❌ Error al guardar."); }
+    } catch(e) {
+      bot.sendMessage(m.chat.id, "❌ Error al guardar.");
+    }
   }
 });
 
@@ -308,12 +289,10 @@ cron.schedule("0 8 1,16 * *", async () => {
     if (txs.length === 0) return bot.sendMessage(AUTHORIZED_USER, "📭 Sin transacciones en los últimos 15 días.");
     const fp = await generateExcel(txs);
     const total = txs.reduce((s,t) => s + parseFloat(t.amount||0), 0);
-    await bot.sendMessage(AUTHORIZED_USER,
-      `📊 *Reporte Quincenal Automático*
+    await bot.sendMessage(AUTHORIZED_USER, `📊 *Reporte Quincenal Automático*
+
 ✅ ${txs.length} transacciones
-💰 Total: *S/ ${total.toFixed(2)}*`,
-      { parse_mode: "Markdown" }
-    );
+💰 Total: *S/ ${total.toFixed(2)}*`, { parse_mode: "Markdown" });
     await bot.sendDocument(AUTHORIZED_USER, fp, { caption: "📎 Reporte quincenal FinTrack" });
     fs.unlinkSync(fp);
   } catch(e) { console.error(e); }
@@ -321,11 +300,7 @@ cron.schedule("0 8 1,16 * *", async () => {
 
 bot.on("polling_error", e => console.error(e.message));
 
-
-// HTTP keepalive para Render.com free tier
+// HTTP keepalive para Railway
 const http = require("http");
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("fintrack-bot OK");
-}).listen(PORT, () => console.log("Health server on port " + PORT));
+http.createServer((req, res) => { res.writeHead(200); res.end("fintrack-bot OK"); }).listen(PORT, () => console.log("Health server on port " + PORT));
