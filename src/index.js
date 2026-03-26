@@ -44,16 +44,17 @@ const fecha = iso => !iso ? "—" : new Date(iso+"T00:00:00").toLocaleDateString
 
 function buildMsg(d, uid) {
   const moneda = d.currency === "USD" ? "💵" : "💰";
-  return (`✅ *Transacción registrada* ` +
-    `🔑 \`${uid}\` ` +
-    `${moneda} *${cur(d.amount, d.currency)}* ` +
-    `📅 ${fecha(d.date)} ` +
-    `👤 ${d.recipient||"—"} ` +
-    `📝 ${d.description||"—"} ` +
-    `💳 ${d.method||"—"} ` +
-    `🏷️ ${d.category||"—"}` +
-    `${d.notes ? ` 🔢 ${d.notes}` : ""}`
-  ).trim();
+  return [
+    `✅ *Transacción registrada*`,
+    `🔑 ID: \`${uid}\``,
+    `${moneda} Monto: *${cur(d.amount, d.currency)}*`,
+    `📅 Fecha: ${fecha(d.date)}`,
+    `👤 Destinatario: ${d.recipient||"—"}`,
+    `📝 Descripción: ${d.description||"—"}`,
+    `💳 Método: ${d.method||"—"}`,
+    `🏷️ Categoría: ${d.category||"—"}`,
+    ...(d.notes ? [`🔢 Ref: ${d.notes}`] : [])
+  ].join("\n");
 }
 
 // ── COMANDOS ────────────────────────────────────────────────────────────────────
@@ -243,6 +244,9 @@ bot.on("message", async m => {
   if (!auth(m) || m.photo || m.document || m.text?.startsWith("/")) return;
   const texto = m.text?.trim();
   if (!texto) return;
+
+  // Bypass: "excel" tiene su propio handler, no pasar a contexto
+  if (/^(excel)$/i.test(texto)) return;
 
   // Si hay transacciones recientes en buffer → aplicar como contexto
   if (recentTxBuffer.length > 0) {
